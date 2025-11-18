@@ -45,7 +45,7 @@
 
 3. **Employee Management System (EMS)**  
     - Built an admin-focused tool using Java Servlets, JSP, and JDBC following a simple MVC pattern.
-    - Added CRUD operations for employee records — create, update, delete, and search.
+    - Added CRUD operations for employee records where we can able to create, update, delete, and search employee details.
     - Implemented session tracking to support login and role-based access.
     - GitHub: https://github.com/Lokiloki69/EMS-project  
 
@@ -57,7 +57,7 @@
 - Basic cloud deployment (Render)
 
 ### Areas of Strength
-- Strong dive to find solutions and fix problems
+- Strong drive to find solutions and fix problems
 - Able to focus and work under pressure 
 
 ### Areas to Improve
@@ -70,25 +70,25 @@
 ## 2. Work Style & Learning Preferences
 
 ### Learning Mode  
-I learn best by **hands-on experimentation** by building something quickly, then diving into documentations. when I get stuck in some points,then I prefer fewer videos. 
+I learn best by **hands-on experimentation** by building something quickly, then diving into documentations. when I get stuck in some points, I prefer watching few videos. 
 
 ### Problem-Solving Approach  
 - Identify the issue first.  
 - Isolate the component or module causing the issue.  
 - Add logging or breakpoints to inspect assumptions.  
 - Search documentation and stack overflow for related errors.  
-- If I’m stuck beyond ~60 minutes of no progress, I step back, re-frame the problem, and then escalate with a clear summary of what I tried.
+- If I’m stuck for a long time without progress, I step back, re-frame the problem, and then escalate with a clear summary of what I tried.
 
 ### Communication Preferences  
 I'm comfortable with both async and sync communication.
-I don’t need frequent check-ins, one brief stand-up daily is sufficient.
+I don’t need frequent check-ins, one brief stand-up call everyday is sufficient.
 
 ### Handling Ambiguity  
 - I am comfortable with loosely defined requirements. 
 - My approach: ask clarifying questions early, then proceed with a prototype and iterate.
 
 ### Independent vs Collaborative  
-I lean toward **independent contribution**. But I value collaboration during planning, architecture, and code review phases.
+I lean toward **independent contribution**. But I value team collaboration during planning, architecture, and code review phases.
 
 ---
 
@@ -96,21 +96,22 @@ I lean toward **independent contribution**. But I value collaboration during pla
 
 ### What I Need from Shailendra  
 - Clear architectural direction when starting significant work.  
-- Product/business context — the “why” behind features.  
+- Product/business context i.e., reason behind the features.  
 - Occasional code/architecture reviews to ensure I’m on track.
+- Optional : resources, articles or documentations that are required for my work.
 
 ### Feedback Preferences  
-I prefer feedback to be **direct**. Tell me what’s wrong and how to improve.
+I prefer feedback to be **direct** and Would like to know what’s wrong and how to improve.
 
 ### Blockers  
-My approach: I attempt self-resolution first. If I’m not making measurable progress, I escalate with a concise summary with what I tried, what failed, where I’m stuck.
+My approach: I attempt self-resolution first. If I’m not making measurable progress, I escalate with a concise summary with what I tried, what failed, and where I’m stuck.
 
 ---
 
 ## 4. Availability & Work Rhythm
 
 ### Work Hours  
-My most productive hours are from **9 AM to 6 PM**.
+My most productive hours are from **10 AM to 6 PM**.
 
 ### Weekend Availability  
 Given the 6-day workweek. On **Sunday**, I can be available for urgent issues.
@@ -123,16 +124,16 @@ I am more of a **morning person**
 ## 5. Goals & Aspirations
 
 ### 3-Month Goals  
-- Build and deliver some complete backend features end-to-end. 
-- Deepen my understanding of system design fundamentals
+- Build and deliver complete backend features end-to-end. 
+- Deepen my understanding of system design.
 - Able to build the softwares or applications which are more scalable.  
-- Reduce time spent debugging by improving my diagnostic tools and habits.
+- To Reduce time spent on debugging by improving my diagnostic skills.
 
 ### Career Direction (2-3 Years)  
 I aim to become a strong **Individual Contributor backend specialist**
 
 ### Success Definition  
 Success in this role means:  
-- Becoming someone the team can rely on for backend architecture and tough problems.
-- Delivering solid, production-ready work without needing constant guidance.
-- Getting more productive — building more in less time while keeping the quality high.
+- Reaching a state where the team can rely on me for backend architecture and tough problems.
+- Delivering solid, production-ready work without constant guidance.
+- Being more productive, and building things in less time while keeping the quality high.
