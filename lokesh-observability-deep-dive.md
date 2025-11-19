@@ -1,0 +1,157 @@
+# Observability Systems - Complete Picture
+
+## Observability Fundamentals
+### Understanding the Three Pillars of the Observability
+
+The three pillars of observability are Metrics, Logs, and Traces. They help you understand what is happening inside a system from different angles.
+
+## What is each Pillar?
+**Metrics** are numerical units that represent the state and performance of your system at a specific point in time. Metrics are quantitative, aggregated data points collected at regular intervals, which can be used for monitoring trends and setting alerts.
+
+**Logs** are timestamped, immutable records of every event that happened within the system. These logs capture what happened and when it happened, that contains "who, what, where, when and how" of the system operations.
+
+**Traces** represent the journey of a single request as it passes through various components of the distributed system. Traces let you know the whole path of execution , relationships between different services and how the components are interacting with each other.
+
+
+## Metrics
+### What data do metrics contain?
+It contains metric name, timestamp, numeric value, and optional labels (also called tags or dimensions). The metric name and labels can identify the time series uniquely.
+
+Metric consists of name, labels(key-value pairs), a value(a floating-point number), and a timestamp(Unix time)
+```
+http_requests_total{method="GET", status="200", service="api"} 1230 @1638364720
+```
+This represents 1230 total HTTP requests at the given timestamp with all the specific characteristics.
+
+### Types of Metrics : 
+There are four key metric types, and each solves a different problem.
+
+#### 1. Counters
+Counters are cumulative metrics that only increase (or resets to zero) and never go down. Counters track totals over time.
+
+- Use cases: Total number of requests processed, Total errors encountered, Total bytes sent/received
+
+```
+http_requests_total{method="POST", endpoint="/api/users"} 5284
+page_views_total{page="/home"} 128456
+```
+Trade-offs : Counters provide absolute totals but require rate calculations to understand velocity. 
+
+
+#### 2. Gauges
+Gauges represent values that can go up or down. They measure the current state at a specific moment
+
+Use cases: Current memory usage, Active connection count, Queue length, Temperature readings
+
+```
+memory_usage_bytes{instance="server-01"} 4294967296
+active_connections{service="database"} 47
+cpu_temperature_celsius{core="0"} 65.3
+```
+Trade-offs : Gauges provide instant snapshots that can have rapid changes between the scrapes. For high-frequency changes, we use histograms.
+
+#### 3. Histograms
+Histograms group values into predefined buckets and count them. They track the frequency of values across predefined ranges.
+
+Structure: A histogram exposes three time series:
+-  <metric_name>_bucket{le="<upper_bound>"} - cumulative counters for each bucket
+-  <metric_name>_sum - total sum of all observations
+-  <metric_name>_count - total count of observations
+
+Example : 
+```
+http_request_duration_seconds_bucket{le="0.1"} 5234
+http_request_duration_seconds_bucket{le="0.5"} 8956
+http_request_duration_seconds_bucket{le="1.0"} 9823
+http_request_duration_seconds_bucket{le="+Inf"} 10000
+http_request_duration_seconds_sum 4567.89
+http_request_duration_seconds_count 10000
+```
+This means 5234 requests finished under 0.1s, 8956 requests finished under 0.5s, etc
+
+Use cases: Request duration/ latency, Response sizes, Processing times
+
+Trade-offs :
+- Efficient for aggregation across dimensions
+- can calculate quantiles on server-side using histogram_quantile
+- Fixed bucket boundaries so we have to choose it wisely
+- Less accurate than summaries
+
+#### 4. Summaries 
+Summaries look similar to histograms, but their job is different, they compute precise percentiles on the client side and show them directly
+
+- <metric_name>{quantile="<φ>"} - pre-calculated quantile values
+- <metric_name>_sum - total sum of observations
+- <metric_name>_count - total count of observations
+
+```
+http_request_duration_seconds{quantile="0.5"} 0.12
+http_request_duration_seconds{quantile="0.9"} 0.45
+http_request_duration_seconds{quantile="0.99"} 1.23
+http_request_duration_seconds_sum 3456.78
+http_request_duration_seconds_count 8000
+```
+Use cases: 
+- Precise quantile calculations when you know exact percentiles needed
+- When value distribution is unpredictable
+
+Trade-offs: 
+- Accurate quantiles are calculated on exact percentiles
+- No need to configure buckets
+- Higher computational cost on client
+
+### When to use Each Metric Type
+- Counters : totals
+- Gauges : real-time values
+- Histograms : distribution + aggregation
+- Summaries : precise percentiles, no aggregation
+
+
+## Logs
+### Structured and Unstructured Logs
+**Unstructured Logs are plain text messages :
+Example
+```
+2023-10-15 14:32:11 ERROR Payment processing failed for user john_doe on order #12345
+```
+
+Disadvantages : Requires complex Regex to process it,  difficult to query specific fields
+
+**Structure Log (JSON)**
+written in structured format;
+Example: 
+```
+{
+  "timestamp": "2023-10-15T14:32:11.234Z",
+  "level": "ERROR",
+  "service": "payment-api",
+  "message": "Payment processing failed",
+  "user_id": "john_doe",
+  "order_id": "12345",
+  "trace_id": "abc-xyz-123",
+  "error_code": "PAYMENT_DECLINED",
+  "amount": 99.99,
+  "currency": "USD"
+}
+
+```
+Advantages: Overcomes the Unstructured format cons, Supports advanced analytics and aggregation and also we easily integrate the log management tools
+
+Use cases : Debugging, Audit records, Investigating errors and requests.
+
+Trade-offs: 
+- Highly detailed
+- Unstructured logs are hard to query
+- Structured logs support analytics
+- No automatic aggregation
+
+
+
+### References :
+1. https://victoriametrics.com/blog/prometheus-monitoring-metrics-counters-gauges-histogram-summaries/
+2. https://prometheus.io/docs/concepts/metric_types/
+3. https://signoz.io/guides/what-are-the-4-types-of-metrics-in-prometheus/
+
+
+
+
