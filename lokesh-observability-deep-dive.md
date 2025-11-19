@@ -145,6 +145,108 @@ Trade-offs:
 - Structured logs support analytics
 - No automatic aggregation
 
+## Traces
+### Traces: spans, trace context, baggage
+**Span** represents a single unit of work in distributed system. 
+It contains:
+- Trace ID - unique Id for whole request journey
+- Span ID - unique Id for specific operation
+- Parent Span ID - Links child to the parent span
+- Operation name - what this span does
+- Start time and duration
+- Attributes - Key-value pairs
+- Events - Timestamped annotations within the span
+- Status - Success, error, or unset
+
+Example: 
+```
+{
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "spanId": "00f067aa0ba902b7",
+  "parentSpanId": "fb1a3d1e4f5b6c7d",
+  "name": "POST /api/orders",
+  "kind": "SERVER",
+  "startTime": "2024-11-18T22:18:00.123Z",
+  "endTime": "2024-11-18T22:18:00.456Z",
+  "attributes": {
+    "http.method": "POST",
+    "http.url": "/api/orders",
+    "http.status_code": 201,
+    "user.id": "12345"
+  },
+  "events": [
+    {
+      "timestamp": "2024-11-18T22:18:00.234Z",
+      "name": "validation_completed"
+    }
+  ],
+  "status": {
+    "code": "OK"
+  }
+}
+```
+
+A trace is complete journey, with collection of all related spans making a directed acyclic graph (DAG)
+
+#### Trace Context and Propagation
+**Trace Context** is the metadata that travels along the request across service boundaries. It includes:
+1. Trace ID 
+2. Span ID 
+3. Trace Flags
+4. Trace State
+
+**Context Propagation** ensures spans are correctly correlated across distributed services. 
+
+**Traceparent** 
+when one service calls another, it sends a tiny information as tag so that the next service knows which request it belong to, which operation is it and also flag to record this in trace or not.
+
+-I understand it is like a courier tracking number printed on the every package so that all delivery centers know that it is a part of shipment 
+
+**Tracestate** is like extra information used by vendors (Jaeger, DataDog, etc) to help them process the trace.
+
+```
+traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+tracestate: vendor1=value1,vendor2=value2
+```
+
+#### Baggage
+**Baggage** is small extra information that travels with the request across all services. 
+- It is like a sticky note attached to a file 
+- we use this baggage when multiple services need to know small information like which tenant, user, feature flag is on, experiment is running.
+
+Example : 
+Service A:
+```
+baggage.set("tenant.id", "acme-corp");
+```
+Service B,C,D :
+```
+baggage.get("tenant.id");// returns "acme-corp"
+```
+now all the other services will know which company i.e., acme-corp that the request belong to without passing it manually
+
+- We should be careful while using baggage because it might increase the header size and also it is sending in header we should never put passwords or sensitive information in it.
+
+### When do we use Traces?
+**Traces** are used when you want to understand how a request moves through multiple services.
+- It is like timeline + map for a single user request
+
+By using Traces we can find:
+- Why is this request slow?
+- Which service caused the error?
+- How do our services depend on each other?
+- Where is time being spent end-to-end?
+
+Real-Life example: 
+when an user clicks "Buy Now":
+1. Request goes to frontend 
+2. Then to cart service
+3. Then to payment service
+4. Then to database
+5. Then back
+
+A trace shows all the steps, how long each one took, and which one failed.
+
 
 
 ### References :
