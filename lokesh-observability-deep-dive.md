@@ -414,6 +414,50 @@ Every timestamp creates a new datapoint in the same series.
 2. https://prometheus.io/docs/concepts/metric_types/
 3. https://signoz.io/guides/what-are-the-4-types-of-metrics-in-prometheus/
 
+---
 
+# Data Collection Architecture
+## What is a collector? Why do we need it instead of directly sending to backend?
+Collector is a small service between the our application and our observability backend.
+- It receives telemetry (metrics, logs, traces), processes it, and forwards it safely.
 
+There are various reasons not to send data directly:
+  1. If there are too many connections then backend will have overload. Collector solves this like a buffer
+  2. Applications use different protocols like OTLP, StatsD, Prometheus but backend expect only one. Collector converts that to standard format that backend understands
+  3. we need to process/clean/filter data. Collector can drop spam logs, reduce cardinality, sample traces, batch + compress. Our app should not do this work, let the collector solve this.
+  4. If backend is down and apps send data directly to backend then the data gets lost. Collector buffers and retries so no loss.
+  5. We might want to send data to multiple destinations then apps don't need to know where data goes. Collector can handle this.
 
+Example: 
+  ```mermaid
+  flowchart LR
+A1[Service A] --> B[Collector]
+A2[Service B] --> B
+A3[Service C] --> B
+B -->|Traces| T[Tempo]
+B -->|Metrics| P[Prometheus]
+B -->|Logs| L[Lokesh]
+```
+
+## Collection Models
+There are three main ways data :
+
+### 1. Agent-based Collection
+- By installing a lightweight agent on each host/server/pod
+Example : Datadog Agent, OpenTelemetry Collector as Agent, New Relic Infrastructure Agent.
+
+- the agent will scrapes metrics, collect logs, capture traces, send everything to central collector or backend
+
+- **Advantages** : no need to modify applications, Handles retries and buffering, Auto-discovers workloads
+
+- **Disavantages**: Uses some CPU/RAM
+
+- we use this when we want full visibility with minimal app changes
+
+### 2. Agentless Collection
+- no agent to be installed , does the remote scraping
+Examples: Prometheus scraping / metrics, CloudWatch using API polling, SNMP polling, Syslog forwarding
+
+Advantages : No agents on servers, Easy to enable, Less resource usage on hosts
+
+Disadvantages : can miss data during network failures, Harder to scale 
