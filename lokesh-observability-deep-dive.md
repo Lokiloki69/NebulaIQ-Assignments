@@ -787,16 +787,5 @@ flowchart TB
 
 ---
 
-## small notes
-
-- application layer = easiest to understand  
-- system layer = machine health  
-- network layer = who talks to who, and how slow  
-- ebpf = deep visibility without touching app  
-- collector cleans everything so backend doesn’t explode  
-- collector also batches, filters, adds metadata  
-
-
 # 3. Backend Pipeline Architecture:
-
 
