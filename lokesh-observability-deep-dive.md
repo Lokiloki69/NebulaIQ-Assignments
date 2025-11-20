@@ -436,7 +436,7 @@ A2[Service B] --> B
 A3[Service C] --> B
 B -->|Traces| T[Tempo]
 B -->|Metrics| P[Prometheus]
-B -->|Logs| L[Lokesh]
+B -->|Logs| L[Loki]
 ```
 
 ## Collection Models
@@ -460,4 +460,343 @@ Examples: Prometheus scraping / metrics, CloudWatch using API polling, SNMP poll
 
 Advantages : No agents on servers, Easy to enable, Less resource usage on hosts
 
-Disadvantages : can miss data during network failures, Harder to scale 
+Disadvantages : can miss data during network failures, Harder to scale, cannot collect deep system data, needs firewall openings
+
+- used where installing agents is restrictred
+
+### 3. eBPF-based collection
+- runs inside Linux Kernel
+- collects data directly from the kernal without modifying apps
+- it can see things like network calls, syscall latency, container events, DNS queries, tcp latency etc…
+- basically it runs at very low level so it captures data even if the application does not expose anything
+
+Advantages: 
+- zero code changes needed
+- low overhead (its in kernel so very fast)
+- captures deep insights (network, syscalls etc)
+- good for microservices and debugging tricky latency issues
+
+Disadvantages:
+- works only on Linux
+- requires newer kernel
+- bit complex to debug
+- some security restrictions
+
+when to use:
+- when we need deep visibility without touching the app
+- when we want auto tracing or network-level data
+- when agent cannot capture low-level info
+
+## Push vs Pull Models
+
+### Push model
+
+- app or agent **pushes** data to collector/backend  
+- Examples: **OTLP**, **StatsD**, **Jaeger**, **FluentBit** etc  
+- good for **logs and traces**  
+- realtime  
+- works behind firewalls  
+- easy to configure in distributed systems  
+
+Advantages:
+- no scrape load  
+- low overhead  
+- doesn’t require exposing endpoints  
+
+Disadvantages:
+- hard to detect failures (if pipeline breaks maybe data lost)  
+- backend can get overloaded if too many pushers  
+
+**used when:** logs, traces, OTLP exporters, cloud env etc.
+
+---
+
+### Pull model
+
+- backend **pulls** data from services  
+- Example: **Prometheus scraping /metrics** endpoint  
+- good for **metrics**  
+- easy to detect failure (scrape fails → you know)  
+- more stable because backend controls the scraping rate  
+
+Advantages: 
+- safe and predictable  
+- backend handles load  
+- no need complex configs in apps  
+
+Disadvantages:
+- not good for logs/traces  
+- requires endpoints to be exposed  
+- harder in firewall-restricted networks  
+
+**used when:**  
+- collecting metrics  
+- Prometheus + Kubernetes setups  
+
+```mermaid
+flowchart LR
+
+subgraph Push_Model
+  P1[Service A] -->|push| P_COL[Collector]
+  P2[Service B] -->|push| P_COL
+  P_COL --> P_BACK[Backend]
+end
+
+subgraph Pull_Model
+  P_MET[Prometheus] -->|scrape| S1[Service A /metrics]
+  P_MET -->|scrape| S2[Service B /metrics]
+end
+```
+
+## What processing happens at collection point?
+
+At the collector side, a lot of processing happens so that the backend does not get overloaded and also the data becomes more useful. Basically the collector sits in the middle and cleans + shapes the telemetry before sending it ahead.
+
+---
+
+### 1. Filtering unwanted data
+- collector can drop logs or metrics which are not needed  
+- like dropping debug logs in production, remove noisy metrics, remove some high-cardinality labels  
+- helps reduce storage cost + backend load  
+- makes the dashboards cleaner because only important data goes in  
+
+Example:  
+- drop all logs with `level=debug`  
+- drop metrics with unbounded or random labels  
+
+---
+
+### 2. Sampling strategies
+Sampling is mainly for **traces** because capturing every trace is too costly. There are different types:
+
+#### head-based sampling
+- decision made at the beginning of the trace  
+- like “sample 1% upfront”  
+- cheap and simple  
+
+#### tail-based sampling
+- collector waits for full trace  
+- then decides based on outcome  
+- keeps error traces, slow traces  
+- more accurate but heavier  
+
+#### probabilistic sampling
+- random sampling like “take 0.1%”  
+- predictable + easy  
+
+Collectors use these strategies so backend doesn’t drown in too many traces.
+
+---
+
+### 3. Buffering and batching
+- collector batches telemetry instead of sending 1 by 1  
+- batching reduces network overhead  
+- buffering stores data temporarily when backend is slow or down  
+- avoids data loss  
+- works like a small queue + optimiser  
+
+---
+
+### 4. Metadata enrichment
+- collector adds extra useful information  
+- like service name, region, cluster ID, pod name, environment, version  
+- helps in filtering, dashboards, grouping  
+- no need to modify app code for this  
+
+Example metadata added:
+```
+service.name = checkout
+env = production
+region = us-east
+k8s.pod = checkout-123
+```
+
+---
+
+### 5. Protocol translation
+- apps send data in different formats  
+- collector converts everything into a common format that backend understands  
+
+Examples:
+- StatsD → OTLP  
+- Jaeger Thrift → OTLP  
+- Syslog → Loki
+- JSON logs → structured logs  
+- Prometheus → remote write  
+
+This makes apps simpler because they don’t need to implement multiple protocols.
+
+---
+
+### processing flow
+
+```mermaid
+flowchart LR
+A["App Telemetry"] --> B["Collector Receiver"]
+B --> C["Processors (Filter, Sample, Enrich, Batch)"]
+C --> D["Exporter"]
+D --> E["Backend"]
+```
+---
+
+## Collection at different layers
+
+collection can happen at different places in the system. each layer gives different kind of data. some are high level, some are low level. all of them finally go to collector and then backend.
+
+layers:
+- application layer (code instrumentation)
+- system layer (host metrics, system logs)
+- network layer (packet stuff)
+- kernel layer (ebpf)
+
+---
+
+### application layer
+- this is inside our app code
+- we add metrics, logs, traces using sdk or auto-instrumentation
+- collects things like request count, latency, errors, spans etc
+
+**how data moves**
+app code -> exporter/agent -> collector -> backend
+
+**why process**
+- add metadata (service name, version etc)
+- sample traces if too many
+- remove sensitive fields from logs
+- convert to otlp or whatever
+
+**performance**
+- instrumentation uses cpu
+- histograms cost a bit more
+- if exporter blocks, app becomes slow (so need async)
+
+---
+
+### system layer
+- collects machine level stuff like cpu, memory, disk, node logs
+- node exporter or agent running on host
+- syslog/journald logs also come from here
+
+**data flow**
+node agent -> collector -> backend
+
+**why process**
+- add k8s labels (pod, namespace)
+- remove useless system logs
+- normalize names
+
+**performance**
+- agent uses little cpu/ram
+- too many hosts = more scrape load
+- scraping every few seconds uses network and cpu
+
+---
+
+### network layer
+- collects network flows, tcp latency, dns queries etc
+- sometimes packet capture (pcap) but heavy
+
+**data flow**
+network tap or tool -> collector -> backend
+
+**why process**
+- parse the packets
+- aggregate flows
+- drop raw packets (too big)
+- label source/dest info
+
+**performance**
+- packet capture is heavy on cpu
+- full packet logs take huge space
+- need some sampling here
+
+---
+
+### kernel layer (ebpf)
+- runs inside linux kernel
+- collects syscall latency, tcp stuff, socket events etc
+- doesn’t need app changes
+
+**data flow**
+ebpf probe -> ring buffer -> local agent -> collector -> backend
+
+**why process**
+- raw kernel events are messy
+- need to convert to metrics/traces
+- need filtering because events are too many
+
+**performance**
+- ebpf is low overhead normally
+- but too many probes = more cpu
+- needs newer linux kernel
+
+---
+
+## Auto vs manual instrumentation
+
+### auto instrumentation
+- automatically instruments http, db, grpc etc
+- no code changes
+- very fast to setup
+
+**pros**: quick,covers lot of libs
+
+**cons** : noisy spans, too generic names, may add labels that increase cardinality
+
+**use when**
+- want observability quickly
+
+---
+
+### manual instrumentation
+- developer writes spans/metrics in code
+- good for business logic
+
+pros:
+- very accurate
+- only what you need
+- good for slo/critical flows
+
+cons:
+- more effort
+- easier to forget some paths
+
+**use when**
+- critical flows like payment, checkout etc
+
+---
+
+## diagram (layers → collector → backend)
+
+```mermaid
+flowchart TB
+  subgraph Layers
+    A1["App Layer"]
+    A2["System Layer"]
+    A3["Network Layer"]
+    A4["Kernel (eBPF)"]
+  end
+
+  A1 --> Col["Collector"]
+  A2 --> Col
+  A3 --> Col
+  A4 --> Col
+
+  Col --> Back["Backend / Storage"]
+```
+
+---
+
+## small notes
+
+- application layer = easiest to understand  
+- system layer = machine health  
+- network layer = who talks to who, and how slow  
+- ebpf = deep visibility without touching app  
+- collector cleans everything so backend doesn’t explode  
+- collector also batches, filters, adds metadata  
+
+
+# 3. Backend Pipeline Architecture:
+
+
