@@ -248,7 +248,167 @@ when an user clicks "Buy Now":
 A trace shows all the steps, how long each one took, and which one failed.
 
 
+### How the three pillars work together
+Suppose if our system breaks at a time then,
+1. Metrices tells you something is wrong like Error rate for something spikes 
+    - it is like Warning lights in the car 
+2. Traces help you zoom in the issue
+    - then we check traces at the time to find the slow or failed requests
+3. Logs give exact details 
+    - we take trace ID and search logs and see what is the issue    
 
+## 1. OTLP (OpenTelemetry Protocol)
+It is official language used by OpenTelemetry to send metrics, logs, and traces from app to any backend (Jaeger, Tempo, SigNoz, Honeycomb, etc).
+- OTLP transports traces, metrics, logs, baggage/context
+- Supported transports : 
+    - gRPC (binary,fast)
+    - HTTP (JSON or Protobuf)
+
+Example (OTLP over HTTP JSON)
+```
+{
+  "resourceLogs": [
+    {
+      "resource": { "service.name": "checkout-service" },
+      "scopeLogs": [
+        {
+          "logRecords": [
+            {
+              "severityText": "ERROR",
+              "body": { "stringValue": "payment failed" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+```mermaid
+flowchart LR
+A[Application] --> B[OTLP Exporter]
+B -->|OTLP/gRPC| C[Collector]
+C -->|OTLP| D[Backend Jaeger/Tempo/SigNoz]
+
+```
+
+## 2. Prometheus Exposition Format
+Application exposes metrics on a HTTP endpoint(/metrics)
+Prometheus pulls (scrapes) this page every few seconds.
+- it is like our application put numbers on a public notice board, and Prometheus walks by and reads it regulary.
+
+Example (/metrics output)
+```
+http_requests_total{method="GET"} 1203
+cpu_usage 78.5
+```
+```mermaid
+flowchart LR
+A[Application<br>/metrics page] -->|Scrape every 15s| P[Prometheus Server]
+```
+
+## 3. StatsD
+- It is a lightweight way to send metrics using UDP.
+- It is like telling the metrics and on other side StatsD server notes it down.
+Example :
+```
+login.success:1|c
+page.load_time:250|ms
+```
+```mermaid
+flowchart LR
+App -->|UDP packets| StatsDServer
+StatsDServer --> Grafana/PrometheusAdapter
+```
+
+## 4. Syslog 
+Old but reliable protocol to send logs to a central log server.
+- it is like a shared mailbox where every server drops its log messages.
+
+Example Syslog line:
+```
+<34>1 2024-01-01T12:00:00Z nginx INFO "User logged in"
+```
+
+Used in OS logs, Network devices, Firewalls, Traditional servers
+ ```mermaid
+flowchart LR
+Server1 -->|Syslog| Collector
+Server2 -->|Syslog| Collector
+Collector --> LogStorage
+```
+
+## 5. Jaeger Thrift
+Jaeger's older protocol for sending trace spans using Apache Thrift.
+Now OTLP become the standard before that Jaeger had it own language for sending trace data.
+
+- still it is used in older Jaeger deployments, Legacy microservices, some libraries still export it
+
+```mermaid
+flowchart LR
+App -->|Jaeger Thrift| JaegerAgent
+JaegerAgent --> JaegerCollector
+JaegerCollector --> JaegerUI
+```
+
+## Cardinality 
+Means how many unique time-series your system is generating.
+Example:
+```
+http_requests_total{method="GET", status="200", user_id="123"}
+```
+
+suppose if we have 5 methods, 10 status codes, 10,00,000 user_ids.
+- then possible sereis =  5 * 10 * 1000000 = 50 million , high cardinality
+
+- Observability systems store time-series, so it need more cpu to scrape, more memory for caching, and also higher cost
+
+- causes Cardinality Explosion like when using high-cardinality labels, too manhy combinations, using histograms with many buckets.
+
+
+## Time-series Nature of Observability Data
+A time-series is a value recording something again and again over time.
+for example:
+```
+http_requests_total{method="GET", status="200"}
+```
+- this is one time-series,
+Another time-series :
+```
+http_requests_total{method="POST", status="200"}   <-- NEW series
+http_requests_total{method="GET", status="500"}    <-- NEW series
+```
+so if our application has :
+- GET + POST
+- 200 + 400 + 500
+then we have 6 time-series( 2 methods * 3 status codes)
+
+```lua
+time →
+|-----|-----|-----|-----|-----|
+  1     2     3     4     5
+
+cpu_usage{host="a"}:  45, 50, 55, 48, 47
+cpu_usage{host="b"}:  30, 32, 29, 31, 28
+```
+Each row = its own time-series
+
+### Real-world example
+Suppose Netflix has this metrix:
+```
+video_streams_total{region="us-east", device="android"}
+```
+then Prometheus will store like this:
+
+```mermaid
+flowchart LR
+A["video_streams_total{region=us-east, device=android}"] --> B["10:00 = 100"]
+A --> C["10:01 = 105"]
+A --> D["10:02 = 110"]
+A --> E["10:03 = 108"]
+```
+Every timestamp creates a new datapoint in the same series.
 ### References :
 1. https://victoriametrics.com/blog/prometheus-monitoring-metrics-counters-gauges-histogram-summaries/
 2. https://prometheus.io/docs/concepts/metric_types/
