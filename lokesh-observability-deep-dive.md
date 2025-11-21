@@ -788,4 +788,1173 @@ flowchart TB
 ---
 
 # 3. Backend Pipeline Architecture:
+## End-to-end data flow
+the whole backend pipeline is basically:
+
+**ingestion → processing → storage → query**
+
+data comes in, gets cleaned, stored, and then we query it.  
+simple pipeline but inside lots of things happen.
+
+---
+
+## Ingestion Layer (how data arrives)
+
+- data can arrive using **http**, **grpc**, **tcp**, sometimes thrift also  
+- depends on the protocol like OTLP (grpc/http), statsd (udp), logs (tcp/http) etc
+
+**load balancing**
+- because tons of telemetry coming, so need load balancer in front  
+- otherwise one ingestion node dies  
+- they usually use nginx, envoy, or built-in lb
+
+**high availability**
+- multiple ingestion nodes running  
+- if one goes down others take traffic  
+- no single point of failure
+
+**initial validation**
+- is the payload valid? json valid? otlp header correct?  
+- basic checks so corrupted data doesn’t break pipeline
+
+**routing**
+- logs go to log pipeline  
+- metrics go to metrics pipeline  
+- traces go to trace pipeline  
+- some backends have separate ingestion endpoints
+
+---
+
+## Processing Stages (middle)
+
+this is where backend shapes the data before storage.
+
+### parsing + normalization
+- logs need parsing (json, syslog, text)  
+- metrics need to be converted to internal series format  
+- traces need span normalization  
+- remove weird fields, rename labels, unify timestamps
+
+### aggregation
+- compute rates from counters  
+- calculate percentiles (p90 p95 p99)  
+- reduce huge raw data into manageable form  
+- helps dashboards run faster because less raw data
+
+### rollups for long term
+- raw data stored short time (like few days)  
+- older data gets downsampled (min, max, avg, count)  
+- useful for long-term trends  
+- save storage cost
+
+### indexing
+- logs indexed by labels, fields, timestamp  
+- metrics indexed by label set (series id)  
+- traces indexed by service name, span name, trace id  
+- without index queries become super slow
+
+### data transformation + enrichment
+- add cluster name, region, env, app version, pod name etc  
+- also drop unwanted fields  
+- sometimes convert log fields to structured fields
+
+---
+
+## Storage Layer
+
+different data needs different storage engine because data nature is different.
+
+### time-series databases
+- **Prometheus TSDB**
+- **InfluxDB**
+- **M3DB**
+- **VictoriaMetrics**
+- **ClickHouse** (also used for metrics by some systems)
+
+metrics = time-series = write-heavy and compressed well.
+
+### log storage
+- **Elasticsearch**
+- **Loki**
+- **ClickHouse** <br>
+logs = huge volume = need search indexing.
+
+### trace storage
+- **Jaeger** → cassandra or elasticsearch  
+- **Tempo** → object storage like S3/GCS  
+traces = big spans but not queried as often.
+
+---
+
+## Why different storage for different data?
+- metrics = small numeric samples → good with TSDB  
+- logs = text, unstructured → need index + search  
+- traces = tree structure, spans → stored in chunks or object store  
+- cost difference → object store is cheap for traces  
+- performance difference → logs need full text search; metrics need fast math queries
+
+---
+
+## Hot vs Warm vs Cold storage
+
+**hot**
+- recent data (like last 1-3 days)  
+- stored in fast local disks  
+- queries are quick  
+- dashboards use this
+
+**warm**
+- older but still somewhat active  
+- maybe compressed or downsampled  
+- slower queries
+
+**cold**
+- very old data  
+- goes to S3, GCS, cheap disk  
+- used rarely  
+- maybe only summaries kept
+
+---
+
+## Compression techniques
+- delta encoding (store diff between values)  
+- run length encoding  
+- snappy, zstd, lz4  
+- chunking logs and traces then compress chunks  
+- this reduces storage cost a lot
+
+---
+
+## Retention policies
+- we decide how long to keep data  
+- example:
+  - metrics raw: 7 days  
+  - metrics rollup: 1 year  
+  - logs: 3–14 days (depends cost)  
+  - traces: sampled only, kept 7–30 days  
+- dropping old data automatically
+
+---
+
+## Query Layer
+
+### query languages
+- **PromQL** (metrics)  
+- **LogQL** (loki logs)  
+- **TraceQL** (tempo traces)  
+- **SQL** (clickhouse, elastic, etc)
+
+### how queries are optimized
+- indexes help jump to right data  
+- chunks and partitions reduce scanning  
+- caching of recent results  
+- pre-aggregated metrics make queries faster  
+- vectorized execution in column stores
+
+### aggregation at query time vs storage time (trade-offs)
+
+**at storage time (precompute)**
+- faster queries  
+- less compute needed later  
+- but less flexibility  
+- wrong aggregation = you lose raw data
+
+**at query time**
+- very flexible  
+- can compute anything  
+- but can be slow on large datasets  
+- more cpu cost
+
+### caching strategies
+- dashboard caching  
+- query result caching  
+- chunk caching in memory  
+- helps avoid hitting disk again and again  
+- makes same graph load fast
+
+---
+
+# 4. Intelligence Layer: Insights, Anomalies, RCA
+
+this layer is like “brains” of observability.  
+till now we only collected + stored data, now we can understand what the data is telling.
+
+---
+
+## A. Insights
+
+### what are insights
+- insights are like small “messages” the system generates from raw data  
+- instead of us checking every graph, it directly says “latency up” or “error spike”  
+- helps us know what changed without staring at 20 dashboards
+
+### how insights get generated
+raw data → stats → patterns → insight
+
+basically:
+- take metrics/logs/traces  
+- compute some statistics  
+- find unusual behaviour  
+- create simple sentence
+
+example:  
+“API latency increased 50% in last hour”
+
+---
+
+### pattern recognition techniques (in my simple understanding)
+
+#### statistical analysis
+- **mean**: average latency  
+- **median**: middle value (good when there are spikes)  
+- **percentiles**: p90, p95, p99 → show tail latency  
+- **std dev**: how “spread out” the values are  
+- **baseline**: what is normal vs current
+
+example insight:  
+“p99 latency jumped from 300ms to 480ms”
+
+#### trend analysis
+- looks at direction: going up/down  
+- slow increase = memory leak  
+- sudden spike = something broke
+
+example:  
+“memory growing for last 2 hours → possible leak”
+
+#### correlation analysis
+- two signals moving together  
+- db latency up → api latency up  
+- cpu high → gc pause high
+
+example:  
+“API errors strongly correlate with Redis timeout spikes”
+
+---
+
+### ML approaches
+
+#### clustering
+- group similar incidents  
+- like grouping all similar error patterns
+
+#### forecasting
+- predict future values  
+- trending up → warn early
+
+#### classification
+- auto label types: memory issue, dependency slow, network issue, etc
+
+example:  
+“Checkout-service error spike likely due to DB latency (learned pattern)”
+
+---
+
+## B. Anomalies
+
+### what is anomaly
+- something that is not normal  
+- value outside expected range  
+- could be spike, drop, weird pattern
+
+### anomaly detection methods
+
+#### threshold-based
+- simple rule: latency > 500ms = alert  
+- **static threshold**: fixed number  
+- **dynamic threshold**: adjusts based on past data
+
+#### statistical
+- **z-score**: how many std dev above mean  
+- **IQR**: outlier detection  
+- **moving avg**: compare current with rolling window
+
+#### ML methods
+- **isolation forest**: finds weird points  
+- **autoencoders**: learns normal, flags abnormal  
+- **LSTM**: time series model learns patterns
+
+### seasonality + trends
+- traffic spike every morning = not anomaly  
+- system must learn daily/weekly patterns  
+- anomaly only if outside seasonal trend
+
+### false positives
+- too many alerts = noise  
+- use smoothing, baselines, grouping  
+- combine metrics before alerting
+
+### severity
+- not every anomaly is critical  
+- classify as minor/major/critical  
+- based on impact (error rate? latency? affected users?)
+
+---
+
+## Implementation of basic anomaly detection
+
+1. collect metric values  
+2. compute baseline (mean, std dev or moving avg)  
+3. check new point vs baseline  
+4. if point too far → anomaly  
+5. send alert or mark
+
+### flowchart
+
+```mermaid
+flowchart TD
+A["Take Metric Values"] --> B["Compute Baseline (mean / std dev / moving avg)"]
+B --> C["Compare new value"]
+C --> D{"Too far from baseline?"}
+D -->|yes| E["Mark as Anomaly"]
+D -->|no| F["Normal"]
+```
+
+---
+
+## C. Root Cause Analysis (RCA)
+
+### what is RCA
+- finding **why** an issue happened  
+- in microservices this is hard because many services talk to each other  
+- one small dependency can slow everything
+
+### why RCA is hard
+- distributed systems = lots of moving parts  
+- logs are in one place, traces another, metrics another  
+- chain of calls across many services  
+- failures propagate
+
+---
+
+## RCA techniques
+
+### correlation across metrics
+- check which metrics changed at same time  
+- maybe cpu up, latency up, error up = same issue  
+- correlation helps find the root
+
+### dependency mapping
+- service A → service B → DB  
+- if A is slow, maybe B or DB is slow  
+- service graph helps narrow down
+
+### trace analysis
+- look at slow traces  
+- check the “critical path”  
+- find which span is slow  
+- check downstream services
+
+### logs
+- search logs around anomaly time  
+- patterns like “timeout”, “connection refused”, “OOM killed”  
+- logs give actual error context
+
+### event correlation
+- check if deployment happened  
+- config change  
+- autoscaling  
+- restart  
+- many outages start right after deploy
+
+---
+
+## RCA data needed
+
+- metrics: cpu, memory, latency, errors  
+- traces: full request path  
+- logs: errors + warnings + stack traces  
+- events: deployments, pod restarts  
+- infra: node pressure, disk io, network  
+- dependency data: which service calls which  
+- version info: old version vs new version
+
+the more data you combine, the faster RCA happens.
+
+---
+
+## How tools help 
+
+### Datadog
+- shows slowest spans  
+- correlates logs with trace_id  
+- highlights services with abnormal error rates  
+- “this issue started after deployment X”
+
+### Grafana (Prometheus + Loki + Tempo)
+- jump from metric alert → traces → logs  
+- tempo highlights slow spans  
+- loki shows logs filtered by trace_id  
+- dashboard panels show spikes clearly
+
+### Signoz
+- flamegraph shows slow spans  
+- shows top errors  
+- correlates metrics + logs + traces  
+- compare before deploy vs after deploy
+
+---
+
+## Example RCA workflow
+
+alert: “high latency on checkout-service”
+
+steps:
+1. go to metrics → see p99 latency spiked  
+2. check which service → checkout  
+3. open traces → find slowest span  
+4. see db-call span taking 900ms (normally 50ms)  
+5. open logs for same trace_id → “db connection timeout”  
+6. check events → db restarted 5 min earlier  
+7. root cause → db restart caused slowdown
+
+---
+
+
+
+
+
+---
+# 5. Observability User Experience
+## Dashboard Patterns
+
+dashboards are basically the “quick view” of system health.  
+they help you see problems fast without reading logs or traces.
+
+---
+
+## Common visualization types
+
+### 1. Time-series graphs
+- the most used chart  
+- shows values over time  
+- line graph, area graph, stacked lines  
+- good for CPU, memory, request rate, latency, error rates  
+- easy to spot spikes or drops  
+- if graph suddenly jumps → something is wrong  
+
+### 2. Gauges + Single stat panels
+- show **one big value**  
+- examples:
+  - CPU = 80%
+  - latency = 120ms
+  - queue length = 10  
+- good for “current status”  
+- fast to read  
+- if gauge becomes red, you know there is issue  
+
+### 3. Heatmaps (mainly for latency)
+- shows distribution of values  
+- color = density  
+- useful when you want to see tail latency (p95, p99)  
+- example: requests piling up in 500ms bucket  
+
+### 4. Histograms
+- break latency or size into buckets  
+- see how many requests fall in each bucket  
+- good to understand shape of data  
+- like:
+  - 0–100ms = many  
+  - 100–300ms = few  
+  - >1s = very few  
+
+### 5. Tables + Logs view
+- tables show top endpoints, error counts, high-latency URLs  
+- logs view shows raw logs for deeper debugging  
+- from dashboard you can jump → logs → traces
+
+---
+
+## Dashboard organization (how to group things)
+
+### 1. Infrastructure dashboards
+- for host/node/pod health  
+- shows:
+  - CPU  
+  - memory  
+  - disk usage  
+  - disk IO  
+  - network traffic  
+  - pod restarts  
+  - node pressure  
+- tells if machine itself is healthy  
+
+### 2. Application dashboards
+- RED metrics:
+  - **R**equests  
+  - **E**rrors  
+  - **D**uration (latency)  
+- breakdown by:
+  - endpoint  
+  - status code  
+  - method (GET, POST)  
+- shows if app is slow or failing  
+
+### 3. Business KPI dashboards
+- product or business metrics  
+- examples:
+  - orders per minute  
+  - payments success rate  
+  - signups  
+  - active users  
+- helps see real impact, not just technical errors  
+
+---
+
+## Variables and templating
+- dashboards usually have dropdown filters:  
+  - environment = prod / stage / dev  
+  - service name  
+  - host / pod / region  
+- makes the same dashboard usable for many services  
+- saves time, no need different dashboard per env  
+
+---
+
+## Information density (how much to show?)
+- not too crowded → becomes useless  
+- not too empty → no value  
+- good dashboard structure:
+  - top: high-level summary (RED metrics)  
+  - middle: breakdown (endpoints, pods)  
+  - bottom: detailed stuff (histograms, heatmaps, logs link)  
+
+---
+
+## Step 1: Datadog Monitor Configuration
+![Monitor screen](screenshots/MonitorScreen.png)
+
+after installing the datadog agent, datadog creates some default monitors.  
+this screen basically shows that the agent is running and datadog is already watching basic stuff like CPU, memory, disk etc.  
+i didn’t create anything manually here — these come out-of-the-box.
+
+---
+
+## Step 2: Redis CLI Commands
+![Redis CLI](screenshots/RedisCLI.png)
+
+here i hit redis using basic `redis-cli` commands just to generate some real activity:  
+- `SET key value`  
+- `GET key`  
+- some loops to increase ops/sec  
+
+this was just to create load so that datadog starts picking up live redis metrics and graphs move.
+
+---
+
+## Step 3: Redis Integration Enabled
+![Redis Integration](screenshots/RedisIntegrationInstalled.png)
+
+then i enabled the redis integration from datadog.  
+after enabling, the agent starts collecting special redis metrics like:  
+- connected clients  
+- memory usage  
+- cache hit ratio  
+- ops per second  
+- keyspace stats  
+
+basically redis-specific monitoring that normal host metrics don’t give.
+
+---
+
+## Step 4: Viewing Redis Metrics
+![Redis Metrics](screenshots/RedisMetricMonitor.png)
+
+now i can see redis live metrics on the datadog dashboard.  
+because i generated activity in step 2, the graphs actually move (ops/sec goes up, memory change etc).  
+this confirms the integration is working fine.
+
+---
+
+# User Workflows (my understanding)
+
+this is how normally any dev or oncall person will debug an issue.  
+i am writing based on how i see dashboards + logs + traces flow together.
+
+---
+
+## 1. alert triggers → user opens dashboard
+
+as soon as alert comes (latency high / error spike), user opens the main dashboard.  
+first thing they check is the main graph where spike happened.
+
+![Spike](./screenshots/Spike.png)
+
+above is from grafana testdata. even though it’s fake data, the workflow is same.  
+user sees sudden jump/dip → that’s the starting point.
+
+---
+
+## 2. pick the correct time range + find what is affected
+
+after opening dashboard, user adjusts time range to when spike happened.  
+then tries to see:
+
+- which service?
+- which pod?
+- which endpoint?
+- is it only one instance or everything?
+
+---
+
+## 3. correlate metrics → then go to logs
+
+after spotting spike, user jumps to logs for the same time range.
+
+![Logs View](./screenshots/LogsView.png)
+
+in real scenarios logs will show errors/timeouts.  
+here logs are empty because the demo has no live logs,  
+but the workflow is same: user checks logs near spike time.
+
+---
+
+## 4. find traces → look at slow spans
+
+after logs, user normally opens traces to see the actual request path.  
+this is where you find the slow service or slow DB call.
+
+![Trace View](./screenshots/TraceView.png)
+
+in this screenshot, you can see multiple spans across services.  
+the long red one indicates a slower operation → possible bottleneck.
+
+---
+
+## 5. identify root cause
+
+from metrics + logs + traces:
+
+- if logs show “db timeout”
+- trace shows a slow db span
+- metric panel shows db latency high
+
+then root cause is clear: db issue.
+
+---
+
+## 6. verify fix
+
+after fix (restart pod, rollback deployment), user again checks dashboard.  
+latency graph should go back to normal.
+
+---
+
+# How users navigate between metrics, logs, and traces
+
+- **metrics → logs**: click on spike → “view logs for this time”
+- **logs → traces**: logs contain trace_id → click to open trace
+- **traces → metrics**: trace shows which service is slow → open that service dashboard
+
+this back-and-forth is normal.
+
+---
+
+# Time range sync
+
+all tools sync time across the 3 pillars:
+
+- metrics  
+- logs  
+- traces  
+
+without correct time range, debugging becomes impossible.
+
+---
+
+# search + filtering patterns
+
+logs: search words like `error`, `timeout`, `failed`, `500`  
+metrics: filter by endpoint, status code, region  
+traces: filter by slow (>500ms), errors only, service name
+
+---
+
+# drill-down style (summary → detail)
+
+1. top-level dashboard summary  
+2. click panel with spike  
+3. go inside endpoint view  
+4. check logs  
+5. check traces  
+6. find slow span  
+7. correlate all three  
+8. root cause found
+
+---
+
+# User Journey
+
+```mermaid
+flowchart LR
+A[Alert fires] --> B[Open Dashboard]
+B --> C[See spike → set time range]
+C --> D[Check which service/pod affected]
+D --> E[Open Logs]
+E --> F[Open Traces]
+F --> G[Find slow span]
+G --> H[Identify Root Cause]
+H --> I[Apply Fix]
+I --> J[Verify in Dashboard]
+```
+
+---
+
+# Tool Analysis (Grafana, Datadog, New Relic) — my understanding
+
+i looked at all 3 tools (demo versions) and noted how they feel to use.  
+not too technical, just how a normal user would experience them.
+
+---
+
+## Grafana — my thoughts
+grafana feels like a “dashboard first” tool.  
+very flexible. you can build anything.  
+but sometimes too many settings everywhere.
+
+### what makes grafana intuitive:
+- left sidebar is simple: dashboards, explore, alerts
+- time picker always visible → easy to switch 15m / 1h etc
+- drilldown is smooth: click graph → explore → logs/traces
+
+### handling large datasets:
+- grafana uses backend (prometheus, loki, tempo) to handle load
+- UI uses pagination + lazy loading
+- logs load only when you scroll (infinite scrolling)
+
+### real-time updates:
+- refresh dropdown (5s, 10s, 30s)
+- works well but can get slow if panel has huge logs
+
+### alerts & insights:
+- alerts are basic
+- mostly metric-based
+- no heavy “insights” features unless you integrate ML systems
+
+### good things:
+- dashboards are super customizable
+- built-in testdata (for demo)
+- open source
+
+### confusing:
+- too many buttons (edit, inspect, explore)
+- new users don’t know whether to use “Explore” or “Dashboard”
+
+---
+
+## Datadog — my thoughts
+feels more polished and “all-in-one”.  
+log + metric + trace switching is the smoothest here.
+
+### what makes datadog intuitive:
+- one search bar for everything
+- clicking a trace shows logs at the same place
+- alerts → related dashboards → traces all linked
+
+### handling large datasets:
+- UI is very responsive because datadog stores everything in their backend
+- logs use heavy indexing → fast search
+- traces sampled smartly
+
+### real-time updates:
+- very fast. feels like live.
+- events stream scrolls instantly
+
+### insights & anomalies:
+datadog has strong ML features:
+- anomaly detection
+- forecast
+- outlier detection
+- suggestions like “latency increased 52%”
+
+### good:
+- very smooth UX
+- easy for beginners
+- auto correlations (events + metrics + traces)
+
+### confusing:
+- pricing is scary
+- too many menus
+- some things feel hidden under 2–3 clicks
+
+---
+
+## New Relic — my thoughts
+new relic UI is clean and modern.  
+their service maps are very nice.
+
+### intuitive parts:
+- service map → you see dependency chain clearly
+- errors inbox → groups errors automatically
+- nerdgraph (queries) is powerful
+
+### handling large datasets:
+- good pagination for logs
+- breakdowns load fast
+- supports infinite scroll
+
+### real-time:
+- not as fast as datadog
+- but better than grafana (depending on backend)
+
+### insights:
+- errors inbox highlights error spikes
+- distributed tracing graphs are nice
+- anomaly detection available but not as automatic as datadog
+
+### good:
+- service maps
+- clean UI
+- strong APM
+
+### confusing:
+- too many “apps” inside new relic one
+- panels sometimes feel cluttered
+
+---
+
+## Simple comparison table
+
+| Feature | Grafana | Datadog | New Relic |
+|--------|---------|---------|-----------|
+| Dashboards | most flexible | very polished | clean |
+| Logs UX | okay | best | good |
+| Traces UX | okay (depends on tempo) | best | good |
+| Real-time | good | excellent | good |
+| Insights | basic | best | medium |
+| Error Analysis | okay | good | very good |
+| Service Maps | depends on plugin | good | best |
+| Learning Curve | easy/medium | easy | medium |
+| Best For | open-source stack | enterprise | APM-heavy teams |
+
+---
+
+# SECTION D — Insight Presentation (my understanding)
+
+insights are basically the “smart” part of observability.  
+instead of showing raw data → tool tells you “something is wrong”.
+
+---
+
+## How tools show insights
+
+### Grafana:
+- mostly panel-level alerts
+- annotations on graphs (“alert fired at 14:31”)
+- no heavy AI stuff unless plugins
+
+### Datadog:
+- cards like “Latency +45% last 15 min”
+- anomaly detection panels
+- error rate spike notifications
+- correlation: “X deployment happened near spike”
+- very visual
+
+### New Relic:
+- “Errors Inbox” groups errors
+- notes like “error rate increased”
+- correlation between services
+
+---
+
+## Anomaly visualization techniques
+
+- **spike line markers** → sudden jump  
+- **shaded regions** → anomaly window  
+- **box plots / bands** → shows expected range  
+- **heatmaps** → patterns over time  
+- **scatter plots** → outliers pop out  
+
+datadog uses bands + ML.  
+grafana uses basic threshold.  
+new relic uses grouping.
+
+---
+
+## RCA (Root Cause Analysis) — how tools help
+
+### Grafana:
+- manual: user checks dashboards → logs → traces
+- no automation for RCA
+
+### Datadog:
+- correlates events + metrics + logs
+- shows “related hosts” and “related metrics”
+- highlights slow spans in trace
+
+### New Relic:
+- service map helps a lot
+- highlights upstream/downstream issues
+- errors inbox narrows down cause
+
+---
+
+## Alert Management UX (simple)
+
+### Grafana:
+- basic alert list
+- each alert → rule → panel
+- not very advanced
+
+### Datadog:
+- alert groups
+- alert details page
+- correlation with logs
+- SLO alerting
+- notifications inside UI
+
+### New Relic:
+- policies + conditions
+- alerts on APM, logs, infra
+- clean interface
+
+---
+
+# My opinion
+- datadog feels the most “helpful” during a real incident  
+  (because it auto connects metrics + logs + traces)
+- grafana is best when you want full control and open-source stack  
+- new relic has the nicest service maps  
+
+overall, all tools follow the same mental model:
+alert → dashboard → logs → traces → root cause → verify.
+
+---
+
+# 6. Technical Challenges & Trade-offs (my understanding)
+
+this section is basically about all the problems that come when systems become big.  
+observability looks simple, but when data becomes huge → everything becomes expensive and slow.  
+there is no perfect solution, every tool makes some trade-off.
+
+---
+
+## 1. Data Volume & Cost
+
+big apps generate crazy amount of data.
+
+metrics → millions of time-series  
+logs → GBs per hour  
+traces → thousands of spans per request (if microservices)
+
+### why this is a problem:
+- storing TBs of logs is super costly  
+- network bandwidth gets consumed when every service pushes data  
+- backend systems like Prometheus / Loki / Tempo need more nodes  
+
+### trade-off:
+you want “full observability”, but cost stops you.  
+so most companies start doing:
+- log sampling  
+- trace sampling  
+- shorter retention for old data  
+- compress everything
+
+no free lunch here.
+
+---
+
+## 2. Cardinality Explosion
+
+cardinality means “how many unique label combinations exist”.
+
+### what causes high cardinality:
+- user_id  
+- session_id  
+- request_id  
+- trace_id  
+- IP address  
+- random IDs  
+- too many service labels  
+- labels created dynamically
+
+### why it's bad:
+- Prometheus storage blows up  
+- queries become slow  
+- indexes become huge  
+- RAM usage increases  
+- scraping slows down
+
+### impact:
+dashboard takes long to load,  
+backend uses too much memory,  
+you hit actual limits.
+
+### mitigation:
+- remove high-cardinality labels  
+- drop unneeded metrics (via collector)  
+- use static label sets  
+- sample traces instead of storing all  
+- use histograms instead of raw values  
+- aggregate at collector before sending
+
+tools like Datadog can handle higher cardinality because they use more expensive infra.  
+Prometheus needs stricter label rules.
+
+---
+
+## 3. Sampling Trade-offs
+
+you sample traces/logs because you can’t store everything.
+
+### why sampling:
+- saves cost  
+- reduces network bandwidth  
+- faster queries  
+- keeps storage small
+
+### trade-off:
+you lose visibility.  
+rare issues may not be sampled.  
+some traces disappear.
+
+### types:
+#### head-based:
+- decide at the start of request  
+- easy but random  
+- you might miss important slow traces
+
+#### tail-based:
+- decide after seeing span duration  
+- good for capturing slow/error traces  
+- but costs more compute (needs buffering)
+
+no perfect choice.
+
+---
+
+## 4. Real-time vs Batch Processing
+
+### real-time:
+- for alerts  
+- dashboards  
+- SLO burn rate  
+- user-facing problems
+
+needs more resources + low latency pipelines.
+
+### batch:
+- analytics  
+- reports  
+- cost optimization  
+- long-term history
+
+batch is cheap, but slow.  
+you can’t use it for alerts.
+
+most systems mix both.  
+e.g., grafana cloud → realtime for 24h, batch for long-term storage.
+
+---
+
+## 5. Storage Optimization
+
+observability systems store huge time-series.  
+they must optimize.
+
+### compression vs query speed:
+- high compression → low cost but slow query  
+- low compression → fast query but expensive
+
+example:  
+Loki compresses logs heavily → cheap but slower search than Elasticsearch.
+
+### downsampling:
+- old data gets aggregated  
+- detailed 1m samples kept for 1 week  
+- then 5m samples kept for 1 month  
+- then 1h samples for long-term
+
+you lose detail but save storage.
+
+### retention policies:
+- logs kept 7/14/30 days  
+- traces often kept only few days  
+- metrics kept longer but downsampled
+
+---
+
+## 6. Query Performance at Scale
+
+when you have TBs of metric/log data → query becomes slow.
+
+### challenges:
+- indexes too large  
+- wide queries (service="*")  
+- high cardinality labels  
+- expensive aggregations  
+
+### strategies:
+- indexes (ES, Loki, ClickHouse)  
+- pre-aggregations (Prometheus recording rules)  
+- caching  
+- sharding (split across nodes)  
+- distributed query engines
+
+trade-off:  
+pre-aggregation saves time but removes flexibility.  
+on-demand aggregation is flexible but slow.
+
+---
+
+## 7. Alert Fatigue
+
+too many alerts → humans stop caring.
+
+### problems:
+- every small issue triggers alerts  
+- engineers get spammed  
+- real issues get ignored  
+- stress increases  
+
+### solutions:
+- combine alerts (“grouping”)  
+- use SLO-based alerts  
+- dynamic thresholds  
+- alert only on symptoms, not internal metrics  
+- deduplicate alerts  
+
+datadog does this very well. grafana alerting is improving.
+
+---
+
+## 8. Context Correlation
+
+connecting metrics → logs → traces is not easy.
+
+### problems:
+- different data formats  
+- missing trace_id in logs  
+- inconsistent service names  
+- different timestamp precisions  
+- sampling hides some traces  
+
+### why it's hard:
+humans want “one story”, but data lives in 3 separate systems.
+
+### need consistent IDs:
+- trace_id  
+- span_id  
+- service name  
+- host/pod name  
+- timestamp normalization
+
+datadog auto-correlates this.  
+grafana requires better configuration.
+
+---
+
+## overall: everything is a trade-off
+
+- want more data → costs explode  
+- compress data → queries slow  
+- want low cardinality → lose detail  
+- want fast alerts → more false alarms  
+- want high accuracy → too expensive  
+- want tail sampling → need more compute
+
+observability is basically balancing **cost**, **performance**, **accuracy**, and **simplicity**.
+
+no perfect solution.  
+every tool chooses differently based on what they optimize for.
 
