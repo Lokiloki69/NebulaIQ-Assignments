@@ -1,17 +1,17 @@
 # Lokesh – NebulaiQ Onboarding Submission
 
 ### 1. **Self Assessment**
- [self-assessment.md](./self-assessment.md)
+ [self-assessment.md](./lokesh-self-assessment.md)
 
 ---
 
 ### 2. **Observability Deep Dive (Assignment 2)** 
- [observability-deep-dive.md](./observability-deep-dive.md)
+ [observability-deep-dive.md](./lokesh-observability-deep-dive.md)
 
 ---
 
 ### 3. **Time-Series Storage & Query Optimization (Assignment 3)**  
-[timeseries-storage-deep-dive.md](./timeseries-storage-deep-dive.md)
+[timeseries-storage-deep-dive.md](./lokesh-timeseries-storage-deep-dive.md)
 
 ---
 
